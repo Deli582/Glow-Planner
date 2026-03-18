@@ -1,0 +1,1056 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>Glow Planner ✨</title>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+
+<!--
+  ╔══════════════════════════════════════════════════════════════════╗
+  ║  GLOW PLANNER — DEBUG LOG (8 bugs fixed)                         ║
+  ╠══════════════════════════════════════════════════════════════════╣
+  ║  BUG #1 [CRITICAL — ROOT CAUSE OF ALL BROKEN UI]                ║
+  ║    Apostrophes inside single-quoted JS strings caused a fatal    ║
+  ║    syntax error: 'You're...' and 'You've...' in selectMood().   ║
+  ║    This crashed the ENTIRE <script> block — zero JS executed,   ║
+  ║    which is why every button, checkbox, and input was dead.     ║
+  ║    FIX: All strings now use backtick template literals.          ║
+  ║                                                                  ║
+  ║  BUG #2  Weekly bar used Math.random() on every render          ║
+  ║    Bar heights reshuffled on every goTo() call because           ║
+  ║    renderAll() fired on navigation and each bar called random(). ║
+  ║    FIX: weeklyData[] stored in state. initWeeklyBar() builds    ║
+  ║    DOM once; updateWeeklyBar() sets heights from real data.      ║
+  ║                                                                  ║
+  ║  BUG #3  renderAll() called on every tab switch                 ║
+  ║    Caused random bars (#2), textarea overwrites (#6), and        ║
+  ║    unnecessary re-renders of off-screen content.                ║
+  ║    FIX: goTo() only renders the target screen's function.        ║
+  ║                                                                  ║
+  ║  BUG #4  deleteTask used implicit global `event` object         ║
+  ║    Inline onclick="deleteTask(id, event)" is unreliable in      ║
+  ║    sandboxed iframes and strict-mode browsers.                   ║
+  ║    FIX: Event delegation on #task-list container; delete buttons ║
+  ║    carry data-deleteid attributes, no global event needed.       ║
+  ║                                                                  ║
+  ║  BUG #5  Category filter UI desynced from state after reload    ║
+  ║    taskFilter was saved to localStorage but cat-pill "All" was   ║
+  ║    hardcoded active in HTML. After reload the filter could be    ║
+  ║    'school' while UI still showed 'All' as highlighted.          ║
+  ║    FIX: taskFilter removed from localStorage. syncCatPills()     ║
+  ║    runs on every planner render to match DOM to live state.      ║
+  ║                                                                  ║
+  ║  BUG #6  Mood note textarea wiped on every navigation           ║
+  ║    renderMood() always overwrote textarea.value = state.moodNote ║
+  ║    so switching tabs mid-typing destroyed unsaved text.          ║
+  ║    FIX: 'input' event auto-syncs textarea to state.moodNote.    ║
+  ║    renderMood() skips overwrite when textarea has focus.         ║
+  ║                                                                  ║
+  ║  BUG #7  Streak hardcoded as "🔥 5 day streak" in HTML          ║
+  ║    Both the stat card and streak badge were static strings.      ║
+  ║    FIX: state.streak stored and rendered by renderHabits().      ║
+  ║    Streak auto-increments when all habits are completed.         ║
+  ║                                                                  ║
+  ║  BUG #8  Shallow Object.assign() could break on schema change   ║
+  ║    If localStorage contained an old schema or corrupt data,      ║
+  ║    render functions would crash silently on undefined fields.    ║
+  ║    FIX: loadState() validates each array field before applying;  ║
+  ║    falls back to DEFAULT_STATE() on any error.                   ║
+  ╚══════════════════════════════════════════════════════════════════╝
+-->
+
+<style>
+  :root {
+    --blush:       #f7c5d0;
+    --blush-deep:  #f0a0b5;
+    --pink-soft:   #fde8ee;
+    --pink-light:  #fff0f4;
+    --beige:       #f9f3ee;
+    --white:       #ffffff;
+    --text-dark:   #3d2c35;
+    --text-mid:    #7a5668;
+    --text-light:  #b89aa8;
+    --accent:      #e8849e;
+    --accent-glow: #f5b8c8;
+    --gold:        #e8c98a;
+    --shadow-card: 0 2px 16px rgba(61,44,53,0.08);
+    --radius-lg:   20px;
+    --radius-md:   14px;
+    --radius-sm:   10px;
+    --font-serif:  'Cormorant Garamond', Georgia, serif;
+    --font-sans:   'DM Sans', sans-serif;
+  }
+
+  * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html, body { height:100%; background:#ede0e6; }
+  body { font-family: var(--font-sans); color: var(--text-dark); }
+
+  .phone-shell {
+    width: 390px; height: 844px; margin: 20px auto;
+    background: var(--pink-light); border-radius: 48px;
+    box-shadow: 0 40px 80px rgba(61,44,53,0.28), 0 0 0 12px #d4bac4, inset 0 0 0 2px rgba(255,255,255,0.6);
+    overflow: hidden; position: relative; display: flex; flex-direction: column;
+  }
+
+  .status-bar {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 14px 28px 8px; font-size: 12px; font-weight: 600; color: var(--text-mid);
+    flex-shrink: 0;
+  }
+  .status-bar .notch { width: 120px; height: 20px; background: var(--text-dark); border-radius: 10px; }
+
+  .screens { flex: 1; overflow: hidden; position: relative; }
+  .screen {
+    position: absolute; inset: 0; overflow-y: auto; overflow-x: hidden;
+    padding-bottom: 90px; opacity: 0; pointer-events: none;
+    transform: translateY(12px);
+    transition: opacity 0.32s ease, transform 0.32s ease;
+    scrollbar-width: none;
+  }
+  .screen::-webkit-scrollbar { display: none; }
+  .screen.active { opacity: 1; pointer-events: all; transform: translateY(0); }
+
+  .nav-bar {
+    position: absolute; bottom: 0; left: 0; right: 0; height: 80px; z-index: 100;
+    background: rgba(255,255,255,0.94); backdrop-filter: blur(20px);
+    border-top: 1px solid rgba(240,160,181,0.2);
+    display: flex; align-items: center; justify-content: space-around; padding-bottom: 10px;
+  }
+  .nav-item {
+    display: flex; flex-direction: column; align-items: center; gap: 4px;
+    cursor: pointer; padding: 8px 16px; border-radius: var(--radius-sm);
+    transition: all 0.2s; font-size: 10px; font-weight: 500; color: var(--text-light);
+    border: none; background: none;
+  }
+  .nav-item .nav-icon { font-size: 20px; line-height: 1; }
+  .nav-item.active { color: var(--accent); }
+  .nav-item.active .nav-icon { filter: drop-shadow(0 0 6px var(--accent-glow)); }
+
+  .card {
+    background: var(--white); border-radius: var(--radius-lg); padding: 20px;
+    box-shadow: var(--shadow-card); margin: 0 16px 14px;
+  }
+  .card-title {
+    font-size: 11px; font-weight: 600; letter-spacing: 0.1em;
+    text-transform: uppercase; color: var(--text-light); margin-bottom: 14px;
+  }
+  .pill {
+    display: inline-flex; align-items: center;
+    background: var(--pink-soft); color: var(--accent);
+    border-radius: 20px; padding: 4px 12px; font-size: 11px; font-weight: 500;
+  }
+  .btn-primary {
+    background: linear-gradient(135deg, var(--blush-deep), var(--accent));
+    color: white; border: none; border-radius: var(--radius-md);
+    padding: 14px 28px; font-family: var(--font-sans); font-size: 14px;
+    font-weight: 600; cursor: pointer; box-shadow: 0 4px 16px rgba(232,132,158,0.4);
+    transition: all 0.2s; width: 100%;
+  }
+  .btn-primary:hover { transform: translateY(-1px); box-shadow: 0 6px 20px rgba(232,132,158,0.5); }
+  .btn-primary:active { transform: translateY(0); }
+  .divider { height: 1px; background: var(--pink-soft); margin: 12px 0; }
+
+  /* Habit rows */
+  .habit-row {
+    display: flex; align-items: center; gap: 12px;
+    padding: 10px 0; cursor: pointer; user-select: none;
+  }
+  .habit-row:not(:last-child) { border-bottom: 1px solid var(--pink-soft); }
+  .custom-check {
+    width: 24px; height: 24px; border-radius: 8px; border: 2px solid var(--blush);
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0; transition: all 0.2s; background: var(--white); position: relative;
+  }
+  .habit-row.done .custom-check {
+    background: linear-gradient(135deg, var(--blush-deep), var(--accent));
+    border-color: var(--accent);
+  }
+  .custom-check::after {
+    content: ''; display: block; width: 10px; height: 6px;
+    border-left: 2px solid white; border-bottom: 2px solid white;
+    transform: rotate(-45deg) scale(0); transition: transform 0.2s; margin-top: -2px;
+  }
+  .habit-row.done .custom-check::after { transform: rotate(-45deg) scale(1); }
+  .habit-row.done .habit-label { text-decoration: line-through; color: var(--text-light); }
+
+  /* Progress */
+  .progress-wrap { margin-top: 10px; }
+  .progress-track { height: 8px; background: var(--pink-soft); border-radius: 4px; overflow: hidden; }
+  .progress-fill {
+    height: 100%; border-radius: 4px;
+    background: linear-gradient(90deg, var(--blush), var(--accent));
+    transition: width 0.4s cubic-bezier(.4,0,.2,1);
+  }
+  .progress-label { display: flex; justify-content: space-between; font-size: 11px; color: var(--text-light); margin-top: 6px; }
+
+  /* Mood buttons */
+  .mood-grid { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
+  .mood-btn {
+    display: flex; flex-direction: column; align-items: center; gap: 4px;
+    padding: 12px; border-radius: var(--radius-md); border: 2px solid transparent;
+    cursor: pointer; background: var(--pink-soft); transition: all 0.2s;
+    min-width: 56px; font-size: 11px; color: var(--text-mid); font-family: var(--font-sans);
+  }
+  .mood-btn .mood-emoji { font-size: 26px; line-height: 1; }
+  /* FIX: scale(1.05) gives visible feedback — original had no scale on .selected */
+  .mood-btn.selected {
+    border-color: var(--accent); background: var(--white);
+    box-shadow: 0 0 0 4px rgba(232,132,158,0.15); transform: scale(1.05);
+  }
+
+  /* Task rows */
+  .task-row {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 0; cursor: pointer; user-select: none;
+  }
+  .task-row:not(:last-child) { border-bottom: 1px solid var(--pink-soft); }
+  .task-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--blush); flex-shrink: 0; transition: all 0.2s; }
+  .task-row.done .task-dot { background: var(--accent); }
+  .task-row.done .task-text { text-decoration: line-through; color: var(--text-light); }
+  .task-text { flex: 1; font-size: 14px; }
+  /* FIX #4: task-delete is a <button> — reliable events, no global `event` needed */
+  .task-delete {
+    font-size: 13px; color: var(--text-light); cursor: pointer;
+    padding: 5px 8px; border: none; background: none;
+    border-radius: 6px; transition: all 0.15s; flex-shrink: 0; line-height: 1;
+  }
+  .task-delete:hover { background: var(--pink-soft); color: var(--accent); }
+
+  /* Inputs */
+  .input-row { display: flex; gap: 8px; margin-top: 14px; }
+  .app-input {
+    flex: 1; border: 1.5px solid var(--blush); border-radius: var(--radius-sm);
+    padding: 10px 14px; font-family: var(--font-sans); font-size: 13px;
+    background: var(--pink-light); color: var(--text-dark); outline: none; transition: border-color 0.2s;
+  }
+  .app-input:focus { border-color: var(--accent); }
+  .app-input::placeholder { color: var(--text-light); }
+  .btn-add {
+    background: linear-gradient(135deg, var(--blush-deep), var(--accent));
+    color: white; border: none; border-radius: var(--radius-sm);
+    width: 42px; height: 42px; font-size: 22px; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 3px 10px rgba(232,132,158,0.35); transition: all 0.2s; flex-shrink: 0;
+  }
+  .btn-add:hover { transform: scale(1.06); }
+  .btn-add:active { transform: scale(0.97); }
+
+  /* Category pills */
+  .cat-pills { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
+  .cat-pill {
+    padding: 5px 12px; border-radius: 20px; font-size: 11px; font-weight: 500;
+    cursor: pointer; background: var(--pink-soft); color: var(--text-mid);
+    border: 1.5px solid transparent; transition: all 0.2s; user-select: none;
+  }
+  .cat-pill.active { background: var(--white); border-color: var(--accent); color: var(--accent); }
+
+  /* Streak badge */
+  .streak-badge {
+    display: inline-flex; align-items: center; gap: 4px;
+    background: linear-gradient(135deg, #ffe5c2, var(--gold));
+    color: #8a5a00; padding: 6px 16px; border-radius: 20px; font-size: 13px; font-weight: 600;
+  }
+
+  /* Quote card */
+  .quote-card {
+    background: linear-gradient(135deg, var(--blush), #f5c6d5);
+    border-radius: var(--radius-lg); padding: 22px; margin: 0 16px 14px; position: relative; overflow: hidden;
+  }
+  .quote-card::before {
+    content: '\201C'; font-family: var(--font-serif); font-size: 120px;
+    color: rgba(255,255,255,0.3); position: absolute; top: -20px; left: 10px; line-height: 1;
+  }
+  .quote-text { font-family: var(--font-serif); font-size: 18px; font-style: italic; color: var(--text-dark); line-height: 1.5; position: relative; z-index: 1; }
+  .quote-author { font-size: 11px; color: var(--accent); font-weight: 600; margin-top: 8px; letter-spacing: 0.05em; text-transform: uppercase; }
+
+  /* Stats row */
+  .stats-row { display: flex; gap: 10px; margin: 0 16px 14px; }
+  .stat-card { flex: 1; background: var(--white); border-radius: var(--radius-md); padding: 16px; box-shadow: var(--shadow-card); text-align: center; }
+  .stat-num { font-family: var(--font-serif); font-size: 32px; color: var(--accent); line-height: 1; }
+  .stat-label { font-size: 10px; color: var(--text-light); font-weight: 500; margin-top: 4px; }
+
+  /* Mood history */
+  .mood-history { display: flex; gap: 8px; align-items: flex-end; }
+  .mood-day { display: flex; flex-direction: column; align-items: center; gap: 4px; flex: 1; }
+  .mood-day .m-emoji { font-size: 18px; }
+  .mood-day .day-label { font-size: 9px; color: var(--text-light); }
+  .mood-day.today .day-label { color: var(--accent); font-weight: 700; }
+
+  /* Priority items */
+  .priority-item { display: flex; align-items: center; gap: 10px; padding: 8px 0; font-size: 13px; color: var(--text-mid); }
+  .priority-num {
+    width: 22px; height: 22px; border-radius: 50%; background: var(--pink-soft); color: var(--accent);
+    display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; flex-shrink: 0;
+  }
+
+  /* Textarea */
+  .app-textarea {
+    width: 100%; border: 1.5px solid var(--blush); border-radius: var(--radius-sm);
+    padding: 12px 14px; font-family: var(--font-sans); font-size: 13px;
+    background: var(--pink-light); color: var(--text-dark);
+    outline: none; resize: none; height: 80px; transition: border-color 0.2s;
+  }
+  .app-textarea:focus { border-color: var(--accent); }
+  .app-textarea::placeholder { color: var(--text-light); }
+
+  /* Weekly bar chart — FIX #2: heights set via JS from real data, never Math.random() */
+  .week-bar { display: flex; gap: 6px; align-items: flex-end; height: 80px; }
+  .week-bar-col { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px; }
+  .week-bar-fill {
+    width: 100%; border-radius: 6px;
+    background: linear-gradient(180deg, var(--blush-deep), var(--blush));
+    min-height: 4px; transition: height 0.5s cubic-bezier(.4,0,.2,1);
+  }
+  .week-bar-col.today .week-bar-fill { background: linear-gradient(180deg, var(--accent), var(--blush-deep)); }
+  .week-bar-label { font-size: 9px; color: var(--text-light); }
+  .week-bar-col.today .week-bar-label { color: var(--accent); font-weight: 700; }
+
+  .sparkle { position: absolute; pointer-events: none; font-size: 14px; opacity: 0.5; }
+
+  @keyframes fadeInUp {
+    from { opacity: 0; transform: translateY(16px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  .animate-in { animation: fadeInUp 0.45s ease both; }
+  .animate-in:nth-child(1) { animation-delay: 0.04s; }
+  .animate-in:nth-child(2) { animation-delay: 0.09s; }
+  .animate-in:nth-child(3) { animation-delay: 0.14s; }
+  .animate-in:nth-child(4) { animation-delay: 0.19s; }
+  .animate-in:nth-child(5) { animation-delay: 0.24s; }
+
+  .home-header {
+    background: linear-gradient(160deg, var(--blush-deep) 0%, var(--blush) 60%, var(--pink-soft) 100%);
+    padding: 20px 24px 28px; position: relative; overflow: hidden;
+  }
+  .home-header::after {
+    content: ''; position: absolute; bottom: -1px; left: 0; right: 0; height: 20px;
+    background: var(--pink-light); border-radius: 20px 20px 0 0;
+  }
+  .greeting { font-family: var(--font-serif); font-size: 26px; color: var(--text-dark); font-weight: 600; }
+  .today-date { font-size: 12px; color: var(--text-mid); margin-top: 4px; font-weight: 500; }
+
+  /* Toast */
+  .toast {
+    position: absolute; bottom: 96px; left: 50%;
+    transform: translateX(-50%) translateY(16px);
+    background: var(--text-dark); color: white; padding: 10px 20px;
+    border-radius: 30px; font-size: 13px; font-weight: 500; white-space: nowrap;
+    opacity: 0; transition: all 0.28s ease; z-index: 300; pointer-events: none;
+  }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+  @media (max-width: 430px) {
+    .phone-shell { width: 100%; height: 100vh; border-radius: 0; margin: 0; box-shadow: none; }
+  }
+</style>
+</head>
+<body>
+
+<div class="phone-shell">
+
+  <div class="status-bar">
+    <span id="clock">9:41 AM</span>
+    <div class="notch"></div>
+    <span>🔋</span>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <div class="screens">
+
+    <!-- ══════════ HOME ══════════ -->
+    <div class="screen active" id="screen-home">
+      <div class="home-header">
+        <span class="sparkle" style="top:12px;right:30px;">✨</span>
+        <span class="sparkle" style="top:36px;right:60px;font-size:10px;">💕</span>
+        <div class="greeting" id="greeting">Good morning, gorgeous 🌸</div>
+        <div class="today-date" id="today-date"></div>
+      </div>
+
+      <div class="card animate-in" style="margin-top:16px;">
+        <div class="card-title">Today's Habits ✨</div>
+        <div id="home-habits-list"></div>
+        <div class="progress-wrap">
+          <div class="progress-track">
+            <div class="progress-fill" id="home-progress" style="width:0%"></div>
+          </div>
+          <div class="progress-label">
+            <span>Daily progress</span><span id="home-pct">0%</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="card animate-in">
+        <div class="card-title">Top 3 Priorities 💪</div>
+        <div id="priorities-list"></div>
+      </div>
+
+      <div class="quote-card animate-in">
+        <div class="quote-text" id="quote-text"></div>
+        <div class="quote-author" id="quote-author"></div>
+      </div>
+
+      <div class="card animate-in">
+        <div class="card-title">This Week 📅</div>
+        <!-- FIX #2: DOM built once in initWeeklyBar(), never with Math.random() -->
+        <div class="week-bar" id="week-bar"></div>
+      </div>
+    </div>
+
+    <!-- ══════════ HABITS ══════════ -->
+    <div class="screen" id="screen-habits">
+      <div style="padding: 24px 24px 0;">
+        <div style="font-family:var(--font-serif);font-size:28px;font-weight:600;color:var(--text-dark);">Habit Tracker ✨</div>
+        <div style="font-size:12px;color:var(--text-light);margin-top:2px;">Stay consistent, glow up 💕</div>
+      </div>
+
+      <div class="stats-row animate-in" style="margin-top:16px;">
+        <div class="stat-card">
+          <div class="stat-num" id="habits-done-count">0</div>
+          <div class="stat-label">Done Today</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-num" id="habits-total-count">0</div>
+          <div class="stat-label">Total Habits</div>
+        </div>
+        <!-- FIX #7: was hardcoded "🔥5" — now populated by renderHabits() -->
+        <div class="stat-card">
+          <div class="stat-num" id="habits-streak-stat">🔥0</div>
+          <div class="stat-label">Day Streak</div>
+        </div>
+      </div>
+
+      <div class="card animate-in" style="padding:16px 20px;">
+        <div class="progress-track" style="height:12px;">
+          <div class="progress-fill" id="habits-progress" style="width:0%;height:12px;border-radius:6px;"></div>
+        </div>
+        <div class="progress-label">
+          <span id="habits-pct-label">0% complete</span>
+          <span class="pill" id="habits-badge">Keep going 💕</span>
+        </div>
+      </div>
+
+      <div class="card animate-in">
+        <div class="card-title">Daily Habits</div>
+        <div id="full-habits-list"></div>
+      </div>
+
+      <!-- FIX #7: streak badge populated dynamically -->
+      <div class="card animate-in" style="text-align:center;">
+        <div style="font-size:13px;color:var(--text-mid);margin-bottom:10px;">Current streak</div>
+        <div class="streak-badge" id="streak-badge-label">🔥 Loading...</div>
+        <div style="font-size:11px;color:var(--text-light);margin-top:10px;" id="streak-subtext">—</div>
+      </div>
+    </div>
+
+    <!-- ══════════ PLANNER ══════════ -->
+    <div class="screen" id="screen-planner">
+      <div style="padding: 24px 24px 0;">
+        <div style="font-family:var(--font-serif);font-size:28px;font-weight:600;color:var(--text-dark);">Daily Planner 📋</div>
+        <div style="font-size:12px;color:var(--text-light);margin-top:2px;">Plan your glow day ✨</div>
+      </div>
+
+      <div style="padding:14px 16px 0;">
+        <!-- FIX #5: active class set by syncCatPills() on render, not hardcoded -->
+        <div class="cat-pills" id="cat-pills">
+          <div class="cat-pill" data-cat="all">All</div>
+          <div class="cat-pill" data-cat="school">📚 School</div>
+          <div class="cat-pill" data-cat="self-care">🌸 Self-care</div>
+          <div class="cat-pill" data-cat="fitness">💪 Fitness</div>
+          <div class="cat-pill" data-cat="other">🌟 Other</div>
+        </div>
+      </div>
+
+      <div class="card animate-in" style="margin-top:10px;">
+        <div class="card-title">Add a Task</div>
+        <div class="input-row">
+          <input class="app-input" id="task-input" placeholder="What needs to get done?" />
+          <!-- FIX #4: standalone <button> — no inline event ref needed -->
+          <button class="btn-add" id="btn-add-task">+</button>
+        </div>
+        <div style="margin-top:10px;">
+          <select class="app-input" id="task-cat" style="width:100%;cursor:pointer;">
+            <option value="all">📌 No category</option>
+            <option value="school">📚 School</option>
+            <option value="self-care">🌸 Self-care</option>
+            <option value="fitness">💪 Fitness</option>
+            <option value="other">🌟 Other</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="card animate-in">
+        <div class="card-title">Today's Tasks</div>
+        <!-- FIX #4: event delegation handles all clicks inside this container -->
+        <div id="task-list"></div>
+        <div id="task-empty" style="text-align:center;color:var(--text-light);font-size:13px;padding:10px 0;display:none;">
+          No tasks here 🌸 Add one above!
+        </div>
+      </div>
+    </div>
+
+    <!-- ══════════ MOOD ══════════ -->
+    <div class="screen" id="screen-mood">
+      <div style="padding: 24px 24px 0;">
+        <div style="font-family:var(--font-serif);font-size:28px;font-weight:600;color:var(--text-dark);">Mood Tracker 💕</div>
+        <div style="font-size:12px;color:var(--text-light);margin-top:2px;">How are you feeling today?</div>
+      </div>
+
+      <div class="card animate-in" style="margin-top:16px;">
+        <div class="card-title">Today's Vibe</div>
+        <!-- FIX #1: onclick removed — listener attached via wireEvents() using event delegation -->
+        <div class="mood-grid" id="mood-grid">
+          <button class="mood-btn" data-mood="happy"><span class="mood-emoji">😊</span><span>Happy</span></button>
+          <button class="mood-btn" data-mood="meh"><span class="mood-emoji">😐</span><span>Meh</span></button>
+          <button class="mood-btn" data-mood="tired"><span class="mood-emoji">😴</span><span>Tired</span></button>
+          <button class="mood-btn" data-mood="stressed"><span class="mood-emoji">😤</span><span>Stressed</span></button>
+          <button class="mood-btn" data-mood="loved"><span class="mood-emoji">😍</span><span>In love</span></button>
+        </div>
+        <div id="mood-message" style="text-align:center;margin-top:14px;font-size:13px;color:var(--accent);font-weight:500;min-height:20px;"></div>
+        <div class="divider"></div>
+        <div style="font-size:12px;color:var(--text-light);margin-bottom:8px;font-weight:500;">
+          Why do you feel this way? <span style="opacity:0.6;">(optional)</span>
+        </div>
+        <!-- FIX #6: auto-saves to state.moodNote on 'input'; renderMood skips overwrite when focused -->
+        <textarea class="app-textarea" id="mood-note" placeholder="Write your thoughts here 🌸"></textarea>
+        <div style="margin-top:12px;">
+          <button class="btn-primary" id="btn-save-mood">Save Mood ✨</button>
+        </div>
+      </div>
+
+      <div class="card animate-in">
+        <div class="card-title">This Week's Vibes</div>
+        <div class="mood-history" id="mood-history"></div>
+      </div>
+
+      <div class="card animate-in" style="background:linear-gradient(135deg,var(--pink-soft),var(--beige));border:none;box-shadow:none;">
+        <div style="text-align:center;">
+          <div style="font-size:30px;margin-bottom:8px;" id="mood-insight-emoji">💕</div>
+          <div style="font-family:var(--font-serif);font-size:16px;font-style:italic;color:var(--text-dark);" id="mood-insight-text">
+            Your feelings are valid. Take it one step at a time 🌸
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /screens -->
+
+  <div class="nav-bar">
+    <button class="nav-item active" id="nav-home"><span class="nav-icon">🏠</span><span>Home</span></button>
+    <button class="nav-item" id="nav-habits"><span class="nav-icon">✅</span><span>Habits</span></button>
+    <button class="nav-item" id="nav-planner"><span class="nav-icon">📋</span><span>Planner</span></button>
+    <button class="nav-item" id="nav-mood"><span class="nav-icon">💕</span><span>Mood</span></button>
+  </div>
+
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     JAVASCRIPT — all 8 bugs fixed
+     ═══════════════════════════════════════════════════════════════ -->
+<script>
+'use strict';
+
+/* ─── Default state factory ──────────────────────────────────────
+   A function so we always get a fresh deep copy, not a shared ref.  */
+function DEFAULT_STATE() {
+  return {
+    habits: [
+      { id:1, emoji:'💧', label:'Drink 8 glasses of water', done:false },
+      { id:2, emoji:'🧴', label:'Morning skincare routine',  done:false },
+      { id:3, emoji:'🏃', label:'Workout / move your body',  done:false },
+      { id:4, emoji:'📓', label:'Journal for 5 minutes',     done:false },
+      { id:5, emoji:'📵', label:'Phone-free morning hour',   done:false },
+      { id:6, emoji:'🥗', label:'Eat something nourishing',  done:false },
+      { id:7, emoji:'😴', label:'Sleep 8+ hours',            done:false },
+    ],
+    tasks: [
+      { id:1, text:'Review chapter 4 notes', cat:'school',    done:false },
+      { id:2, text:'Face mask + self-care',   cat:'self-care', done:false },
+      { id:3, text:'15-min yoga session',     cat:'fitness',   done:false },
+    ],
+    mood:        null,
+    moodNote:    '',
+    moodHistory: [
+      { day:'Mon', emoji:'😊' }, { day:'Tue', emoji:'😴' },
+      { day:'Wed', emoji:'😊' }, { day:'Thu', emoji:'😍' },
+      { day:'Fri', emoji:'😐' }, { day:'Sat', emoji:'😊' }, { day:'Sun', emoji:'' },
+    ],
+    priorities:  ['Finish history essay 📚', 'Go for a 30-min walk 🏃', 'Call bestie 📞'],
+    streak:      5,
+    // FIX #2: Deterministic percentages per day — never Math.random()
+    weeklyData:  [52, 78, 65, 90, 43, 68, 30],
+  };
+}
+
+let state = DEFAULT_STATE();
+
+// taskFilter lives in memory only — NOT persisted to localStorage.
+// This prevents the cat-pill desync bug (#5) where the filter state
+// survives reload but the UI always starts with 'All' highlighted.
+let taskFilter = 'all';
+
+/* ─── Constants ──────────────────────────────────────────────────
+   FIX #1: All strings with apostrophes use backtick template
+   literals. The original 'You're...' and 'You've...' strings
+   used single quotes, creating a syntax error that crashed the
+   entire <script> block — causing 100% of interactive failures.  */
+const QUOTES = [
+  { text:`She believed she could, so she did.`,         author:`— R.S. Grey` },
+  { text:`You are enough. You have always been enough.`,author:`— Unknown` },
+  { text:`Be your own kind of beautiful.`,              author:`— Unknown` },
+  { text:`Glow different. Glow you.`,                   author:`— Glow Planner` },
+  { text:`Progress, not perfection.`,                   author:`— Unknown` },
+  { text:`Your only limit is your mindset.`,            author:`— Unknown` },
+  { text:`Discipline is choosing yourself every day.`,  author:`— Unknown` },
+];
+
+const MOOD_MESSAGES = {
+  happy:   `Love that for you! Keep that beautiful energy ✨`,
+  meh:     `That's okay — even neutral days have beauty 🌸`,      // FIX #1
+  tired:   `Rest is productive too. Be gentle with yourself 💕`,
+  stressed:`Take a deep breath. You've got this, gorgeous 💪`,   // FIX #1
+  loved:   `Aww you're glowing from the inside out 😍`,          // FIX #1
+};
+
+const MOOD_INSIGHTS = {
+  happy:   { emoji:`🌟`, text:`You're absolutely glowing today ✨` },  // FIX #1
+  meh:     { emoji:`🌼`, text:`Neutral days are still beautiful 🌸` },
+  tired:   { emoji:`🛁`, text:`Rest is self-care. You deserve it 💕` },
+  stressed:{ emoji:`🫧`, text:`Breathe in, breathe out. You've got this 🌿` }, // FIX #1
+  loved:   { emoji:`💖`, text:`You deserve all the love you give 😍` },
+};
+
+const CAT_EMOJI = { school:`📚`, 'self-care':`🌸`, fitness:`💪`, other:`🌟`, all:`📌` };
+const DAYS      = [`Mon`,`Tue`,`Wed`,`Thu`,`Fri`,`Sat`,`Sun`];
+const MOOD_EMOJIS = { happy:`😊`, meh:`😐`, tired:`😴`, stressed:`😤`, loved:`😍` };
+
+/* ─── Persistence ────────────────────────────────────────────────
+   FIX #8: Validate each array field before merging saved data.
+   If any critical field is missing/wrong type, fall back to default
+   instead of letting a corrupt value silently break render funcs.  */
+function saveState() {
+  try {
+    localStorage.setItem(`glowplanner_v2`, JSON.stringify(state));
+    // Note: taskFilter is NOT included — intentional (see FIX #5)
+  } catch(e) { /* localStorage unavailable — silently continue */ }
+}
+
+function loadState() {
+  try {
+    const raw = localStorage.getItem(`glowplanner_v2`);
+    if (!raw) return;
+    const saved = JSON.parse(raw);
+
+    // Validate each array field — if invalid, keep the default
+    if (!Array.isArray(saved.habits))      delete saved.habits;
+    if (!Array.isArray(saved.tasks))       delete saved.tasks;
+    if (!Array.isArray(saved.moodHistory)) delete saved.moodHistory;
+    if (!Array.isArray(saved.priorities))  delete saved.priorities;
+    if (!Array.isArray(saved.weeklyData))  delete saved.weeklyData;
+    if (typeof saved.streak !== `number`)  delete saved.streak;
+
+    Object.assign(state, saved);
+  } catch(e) {
+    console.warn(`Glow Planner: corrupt localStorage, using defaults.`);
+    state = DEFAULT_STATE();
+  }
+}
+
+/* ─── Helpers ────────────────────────────────────────────────── */
+function calcHabitPct() {
+  if (!state.habits.length) return 0;
+  return Math.round(state.habits.filter(h => h.done).length / state.habits.length * 100);
+}
+
+// 0 = Mon … 6 = Sun (JS getDay: 0=Sun so we rotate)
+function todayIdx() { return (new Date().getDay() + 6) % 7; }
+
+function getGreeting() {
+  const h = new Date().getHours();
+  if (h < 12) return `Good morning, gorgeous 🌸`;
+  if (h < 17) return `Good afternoon, queen ✨`;
+  return `Good evening, beauty 💕`;
+}
+
+function formatDate(d) {
+  return d.toLocaleDateString(`en-US`, { weekday:`long`, month:`long`, day:`numeric`, year:`numeric` });
+}
+
+// Minimal HTML escape to prevent XSS if user types < > & in task text
+function esc(s) {
+  return String(s)
+    .replace(/&/g,`&amp;`).replace(/</g,`&lt;`)
+    .replace(/>/g,`&gt;`).replace(/"/g,`&quot;`);
+}
+
+/* ─── Toast ─────────────────────────────────────────────────── */
+let _toastTimer = null;
+function toast(msg) {
+  const el = document.getElementById(`toast`);
+  el.textContent = msg;
+  el.classList.add(`show`);
+  clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(() => el.classList.remove(`show`), 2200);
+}
+
+/* ─── Navigation ────────────────────────────────────────────────
+   FIX #3: renderAll() on every goTo() was the cause of bugs #2 and
+   #6. We now render ONLY the target screen. This also prevents
+   the weekly bar from re-randomizing and the textarea from being
+   overwritten while the user is on a different tab.              */
+function goTo(name) {
+  document.querySelectorAll(`.screen`).forEach(s => s.classList.remove(`active`));
+  document.querySelectorAll(`.nav-item`).forEach(n => n.classList.remove(`active`));
+
+  const screen = document.getElementById(`screen-${name}`);
+  const navBtn  = document.getElementById(`nav-${name}`);
+  if (!screen || !navBtn) return;
+
+  screen.classList.add(`active`);
+  navBtn.classList.add(`active`);
+  screen.scrollTop = 0;
+
+  // Only render the screen we're switching to
+  const renderers = { home: renderHome, habits: renderHabits, planner: renderPlanner, mood: renderMood };
+  if (renderers[name]) renderers[name]();
+}
+
+/* ─── Render: HOME ──────────────────────────────────────────── */
+function renderHome() {
+  document.getElementById(`greeting`).textContent   = getGreeting();
+  document.getElementById(`today-date`).textContent = formatDate(new Date());
+
+  const q = QUOTES[new Date().getDay() % QUOTES.length];
+  document.getElementById(`quote-text`).textContent   = q.text;
+  document.getElementById(`quote-author`).textContent = q.author;
+
+  // Habits overview (first 4) — handlers via addEventListener, not innerHTML onclick
+  const list = document.getElementById(`home-habits-list`);
+  list.innerHTML = ``;
+  state.habits.slice(0, 4).forEach(h => {
+    const row = document.createElement(`div`);
+    row.className = `habit-row${h.done ? ` done` : ``}`;
+    row.innerHTML = `
+      <div class="custom-check"></div>
+      <span style="font-size:16px;">${h.emoji}</span>
+      <span class="habit-label" style="font-size:13px;flex:1;">${esc(h.label)}</span>`;
+    row.addEventListener(`click`, () => { toggleHabit(h.id); renderHome(); });
+    list.appendChild(row);
+  });
+
+  const pct = calcHabitPct();
+  document.getElementById(`home-progress`).style.width = pct + `%`;
+  document.getElementById(`home-pct`).textContent      = pct + `%`;
+
+  const pl = document.getElementById(`priorities-list`);
+  pl.innerHTML = ``;
+  state.priorities.forEach((p, i) => {
+    pl.innerHTML += `<div class="priority-item">
+      <div class="priority-num">${i + 1}</div>
+      <span style="font-size:13px;color:var(--text-mid);">${esc(p)}</span>
+    </div>`;
+  });
+
+  updateWeeklyBar(); // update heights from state (FIX #2)
+}
+
+/* Weekly bar — DOM built ONCE in initWeeklyBar(), heights updated here.
+   FIX #2: No Math.random(). Heights come from state.weeklyData[].      */
+function initWeeklyBar() {
+  const container = document.getElementById(`week-bar`);
+  container.innerHTML = ``;
+  const todayI = todayIdx();
+  DAYS.forEach((day, i) => {
+    const col = document.createElement(`div`);
+    col.className = `week-bar-col${i === todayI ? ` today` : ``}`;
+    col.innerHTML = `
+      <div class="week-bar-fill" id="wf-${i}" style="height:4px;"></div>
+      <div class="week-bar-label">${day}</div>`;
+    container.appendChild(col);
+  });
+}
+
+function updateWeeklyBar() {
+  const maxH = 58; // max bar height in px
+  state.weeklyData.forEach((val, i) => {
+    const el = document.getElementById(`wf-${i}`);
+    if (el) el.style.height = Math.max(4, Math.round((val / 100) * maxH)) + `px`;
+  });
+}
+
+/* ─── Render: HABITS ────────────────────────────────────────────
+   FIX #7: All streak text now comes from state.streak,
+   not hardcoded "🔥 5 day streak" strings in the HTML.           */
+function renderHabits() {
+  const pct   = calcHabitPct();
+  const done  = state.habits.filter(h => h.done).length;
+  const total = state.habits.length;
+  const next  = Math.ceil((state.streak + 1) / 7) * 7;
+
+  document.getElementById(`habits-done-count`).textContent = done;
+  document.getElementById(`habits-total-count`).textContent = total;
+  document.getElementById(`habits-streak-stat`).textContent = `🔥${state.streak}`;
+  document.getElementById(`habits-progress`).style.width   = pct + `%`;
+  document.getElementById(`habits-pct-label`).textContent  = `${pct}% complete`;
+  document.getElementById(`habits-badge`).textContent =
+    pct === 100 ? `✨ Perfect day!` : pct > 50 ? `Almost there 💪` : `Keep going 💕`;
+  document.getElementById(`streak-badge-label`).textContent =
+    state.streak > 0 ? `🔥 ${state.streak} day streak — you're glowing!` : `Start your streak today 🌸`;
+  document.getElementById(`streak-subtext`).textContent =
+    state.streak > 0 ? `Keep it up and hit ${next} days 🎯` : `Complete all habits to begin!`;
+
+  const list = document.getElementById(`full-habits-list`);
+  list.innerHTML = ``;
+  state.habits.forEach(h => {
+    const row = document.createElement(`div`);
+    row.className = `habit-row${h.done ? ` done` : ``}`;
+    row.innerHTML = `
+      <div class="custom-check"></div>
+      <span style="font-size:20px;">${h.emoji}</span>
+      <span class="habit-label" style="font-size:14px;flex:1;">${esc(h.label)}</span>`;
+    row.addEventListener(`click`, () => { toggleHabit(h.id); renderHabits(); });
+    list.appendChild(row);
+  });
+}
+
+/* ─── Render: PLANNER ───────────────────────────────────────────
+   FIX #5: syncCatPills() re-applies active class from taskFilter.
+   FIX #4: Task rows use data-taskid/data-deleteid attributes;
+           clicks handled by event delegation on #task-list.      */
+function renderPlanner() {
+  syncCatPills(); // FIX #5
+
+  const taskList = document.getElementById(`task-list`);
+  const emptyEl  = document.getElementById(`task-empty`);
+  taskList.innerHTML = ``;
+
+  const filtered = taskFilter === `all`
+    ? state.tasks
+    : state.tasks.filter(t => t.cat === taskFilter);
+
+  if (filtered.length === 0) {
+    emptyEl.style.display = `block`;
+    emptyEl.textContent = taskFilter === `all`
+      ? `No tasks yet 🌸 Add one above!`
+      : `No ${taskFilter} tasks yet 🌸`;
+  } else {
+    emptyEl.style.display = `none`;
+    filtered.forEach(t => {
+      const row = document.createElement(`div`);
+      row.className = `task-row${t.done ? ` done` : ``}`;
+      row.dataset.taskid = t.id; // used by delegation to toggle
+      row.innerHTML = `
+        <div class="task-dot"></div>
+        <span class="task-text">${esc(t.text)}</span>
+        <span class="pill" style="font-size:10px;">${CAT_EMOJI[t.cat] || ``}</span>
+        <button class="task-delete" data-deleteid="${t.id}" aria-label="Delete task">✕</button>`;
+      taskList.appendChild(row);
+    });
+  }
+}
+
+// FIX #5: Sync active pill to the live taskFilter value (runs on every planner render)
+function syncCatPills() {
+  document.querySelectorAll(`.cat-pill`).forEach(p => {
+    p.classList.toggle(`active`, p.dataset.cat === taskFilter);
+  });
+}
+
+/* ─── Render: MOOD ──────────────────────────────────────────────
+   FIX #6: Textarea value is NOT overwritten when it has focus.
+   The 'input' event listener auto-saves to state.moodNote so the
+   value is always current — navigation no longer wipes typed text. */
+function renderMood() {
+  document.querySelectorAll(`.mood-btn`).forEach(btn => {
+    btn.classList.toggle(`selected`, btn.dataset.mood === state.mood);
+  });
+
+  document.getElementById(`mood-message`).textContent =
+    state.mood ? (MOOD_MESSAGES[state.mood] || ``) : ``;
+
+  // FIX #6: Only restore textarea if user isn't actively typing in it
+  const textarea = document.getElementById(`mood-note`);
+  if (document.activeElement !== textarea) {
+    textarea.value = state.moodNote;
+  }
+
+  if (state.mood && MOOD_INSIGHTS[state.mood]) {
+    document.getElementById(`mood-insight-emoji`).textContent = MOOD_INSIGHTS[state.mood].emoji;
+    document.getElementById(`mood-insight-text`).textContent  = MOOD_INSIGHTS[state.mood].text;
+  } else {
+    document.getElementById(`mood-insight-emoji`).textContent = `💕`;
+    document.getElementById(`mood-insight-text`).textContent  = `Your feelings are valid. Take it one step at a time 🌸`;
+  }
+
+  const hist   = document.getElementById(`mood-history`);
+  hist.innerHTML = ``;
+  const todayI = todayIdx();
+  state.moodHistory.forEach((m, i) => {
+    hist.innerHTML += `
+      <div class="mood-day${i === todayI ? ` today` : ``}">
+        <span class="m-emoji">${m.emoji || `—`}</span>
+        <span class="day-label">${m.day}${i === todayI ? ` ✦` : ``}</span>
+      </div>`;
+  });
+}
+
+/* ─── Habit logic ───────────────────────────────────────────── */
+function toggleHabit(id) {
+  const h = state.habits.find(x => x.id === id);
+  if (!h) return;
+  h.done = !h.done;
+
+  // Keep today's weekly bar in sync with actual habit progress
+  state.weeklyData[todayIdx()] = calcHabitPct();
+  updateWeeklyBar();
+
+  // Increment streak if all habits just became complete
+  if (h.done && state.habits.every(x => x.done)) {
+    state.streak += 1;
+    toast(`🔥 ${state.streak} day streak! You're on fire!`);
+  }
+
+  saveState();
+}
+
+/* ─── Task logic ─────────────────────────────────────────────── */
+function addTask() {
+  const input = document.getElementById(`task-input`);
+  const text  = input.value.trim();
+  if (!text) {
+    input.style.borderColor = `var(--accent)`;
+    setTimeout(() => (input.style.borderColor = ``), 700);
+    return;
+  }
+  const cat = document.getElementById(`task-cat`).value;
+  state.tasks.push({ id: Date.now(), text, cat, done: false });
+  input.value = ``;
+  input.focus();
+  saveState();
+  renderPlanner();
+  toast(`Task added ✨`);
+}
+
+function toggleTask(id) {
+  const t = state.tasks.find(x => x.id === id);
+  if (!t) return;
+  t.done = !t.done;
+  saveState();
+  renderPlanner();
+}
+
+function deleteTask(id) {
+  state.tasks = state.tasks.filter(x => x.id !== id);
+  saveState();
+  renderPlanner();
+  toast(`Removed 🌸`);
+}
+
+/* ─── Mood logic ─────────────────────────────────────────────── */
+function selectMood(key) {
+  state.mood = key;
+  saveState();
+  renderMood();
+}
+
+function saveMoodNote() {
+  // Read textarea in case user never blurred (auto-save might not have fired)
+  state.moodNote = document.getElementById(`mood-note`).value;
+  if (state.mood) {
+    state.moodHistory[todayIdx()].emoji = MOOD_EMOJIS[state.mood] || ``;
+  }
+  saveState();
+
+  const btn = document.getElementById(`btn-save-mood`);
+  btn.textContent = `Saved! 💕`;
+  btn.style.background = `linear-gradient(135deg,#a8d5a2,#6abf69)`;
+  setTimeout(() => {
+    btn.textContent = `Save Mood ✨`;
+    btn.style.background = ``;
+    renderMood();
+  }, 1600);
+}
+
+/* ─── Clock ──────────────────────────────────────────────────── */
+function updateClock() {
+  const now = new Date();
+  let h     = now.getHours();
+  const m   = String(now.getMinutes()).padStart(2, `0`);
+  const ap  = h >= 12 ? `PM` : `AM`;
+  h = h % 12 || 12;
+  document.getElementById(`clock`).textContent = `${h}:${m} ${ap}`;
+}
+
+/* ─── Wire all events ───────────────────────────────────────────
+   All event listeners attached here using addEventListener.
+   No inline onclick attributes on dynamically generated elements.
+   Event delegation used for task-list and mood-grid containers.  */
+function wireEvents() {
+
+  // Navigation
+  [`home`,`habits`,`planner`,`mood`].forEach(name => {
+    document.getElementById(`nav-${name}`).addEventListener(`click`, () => goTo(name));
+  });
+
+  // Add task — button click + Enter key
+  document.getElementById(`btn-add-task`).addEventListener(`click`, addTask);
+  document.getElementById(`task-input`).addEventListener(`keydown`, e => {
+    if (e.key === `Enter`) addTask();
+  });
+
+  // FIX #4: Event delegation on #task-list
+  // One listener handles both row-toggle and delete-button clicks.
+  // data-taskid   → toggle
+  // data-deleteid → delete (stopPropagation prevents row toggle from also firing)
+  document.getElementById(`task-list`).addEventListener(`click`, e => {
+    const delBtn = e.target.closest(`[data-deleteid]`);
+    if (delBtn) {
+      e.stopPropagation();
+      deleteTask(Number(delBtn.dataset.deleteid));
+      return;
+    }
+    const row = e.target.closest(`[data-taskid]`);
+    if (row) toggleTask(Number(row.dataset.taskid));
+  });
+
+  // Category filter pills — delegation on parent
+  document.getElementById(`cat-pills`).addEventListener(`click`, e => {
+    const pill = e.target.closest(`.cat-pill`);
+    if (!pill) return;
+    taskFilter = pill.dataset.cat;
+    renderPlanner();
+  });
+
+  // Mood buttons — delegation on grid container
+  document.getElementById(`mood-grid`).addEventListener(`click`, e => {
+    const btn = e.target.closest(`.mood-btn`);
+    if (btn) selectMood(btn.dataset.mood);
+  });
+
+  // Save mood button
+  document.getElementById(`btn-save-mood`).addEventListener(`click`, saveMoodNote);
+
+  // FIX #6: Auto-save mood note text to state on every keystroke.
+  // This ensures state.moodNote is always current before any navigation
+  // that might trigger renderMood() and restore the textarea value.
+  document.getElementById(`mood-note`).addEventListener(`input`, e => {
+    state.moodNote = e.target.value;
+    // (no saveState() on every keypress — flush happens on Save or next action)
+  });
+}
+
+/* ─── Init ───────────────────────────────────────────────────── */
+function init() {
+  loadState();       // FIX #8: validated load with safe fallback
+  wireEvents();      // all listeners attached — no inline onclick anywhere
+  initWeeklyBar();   // FIX #2: build bar DOM once
+  updateClock();
+  setInterval(updateClock, 15_000);
+  renderHome();      // FIX #3: render only the active starting screen
+}
+
+init();
+</script>
+</body>
+</html>
